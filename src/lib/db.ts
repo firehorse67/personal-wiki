@@ -60,11 +60,34 @@ db.version(4).stores({
 
 /** Merge note rows pulled from Supabase. Local wins until synced. */
 export async function mergeNotesFromServer(rows: Note[]): Promise<void> {
-	await db.transaction('rw', db.notes, db.tombstones, async () => {
+	await db.transaction('rw', db.notes, db.tombstones, db.attributes, async () => {
 		for (const row of rows) {
 			if (await db.tombstones.get(row.id)) continue; // deleted locally, push pending
 			const existing = await db.notes.get(row.id);
-			if (existing?.dirty) continue; // local edits win until they sync
+			if (existing?.dirty) {
+				// Conflict check: did the content or title actually change?
+				if (existing.title !== row.title || existing.content !== row.content) {
+					// It's a real conflict. Let's add a conflict tag/attribute if not present.
+					const hasConflict = await db.attributes
+						.where('note_id')
+						.equals(row.id)
+						.filter((a) => a.key === 'conflict')
+						.first();
+					if (!hasConflict) {
+						await db.attributes.put({
+							id: crypto.randomUUID(),
+							note_id: row.id,
+							type: 'label',
+							key: 'conflict',
+							value: 'server-version-diverged',
+							dirty: 1,
+							modified_at: Date.now(),
+							updated_at: new Date().toISOString()
+						});
+					}
+				}
+				continue; // local edits win until they sync
+			}
 			await db.notes.put({ ...row, dirty: 0, modified_at: Date.now() });
 		}
 	});

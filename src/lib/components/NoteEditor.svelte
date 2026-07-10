@@ -2149,7 +2149,7 @@
 						autofocus
 					/>
 				{:else}
-					<div class="attribute-pill" class:relation={attr.type === 'relation'}>
+					<div class="attribute-pill" class:relation={attr.type === 'relation'} class:conflict={attr.key === 'conflict'}>
 						<button
 							type="button"
 							class="attr-text"
@@ -4434,6 +4434,17 @@
 	.attribute-pill.relation:hover {
 		background: #e0e7ff;
 		border-color: #c7d2fe;
+	}
+
+	.attribute-pill.conflict {
+		background: #fee2e2;
+		border-color: #fecaca;
+		color: #b91c1c;
+	}
+
+	.attribute-pill.conflict:hover {
+		background: #fcd3d3;
+		border-color: #fca5a5;
 	}
 
 	.attr-text {

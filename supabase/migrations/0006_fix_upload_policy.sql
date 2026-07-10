@@ -1,0 +1,6 @@
+-- SUPERSEDED — do not run. On current Supabase projects the SQL editor
+-- cannot reliably create policies on storage.objects (the table is owned
+-- by supabase_storage_admin), which is why this migration reported success
+-- without the policy actually landing. Attachment uploads now use one-time
+-- signed upload URLs issued by /api/upload-url after aal2 verification, so
+-- no storage RLS policy is required at all. See 0005 for the same story.

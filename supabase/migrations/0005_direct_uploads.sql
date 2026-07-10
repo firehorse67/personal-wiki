@@ -1,0 +1,6 @@
+-- SUPERSEDED — do not run. This tried to grant aal2 sessions direct INSERT
+-- on storage.objects for the clips bucket, but the SQL editor cannot
+-- reliably create policies on storage.objects on current Supabase projects
+-- (owned by supabase_storage_admin). Uploads instead use one-time signed
+-- upload URLs from /api/upload-url (aal2-verified server-side), which need
+-- no storage policies: the signed token carries its own authorization.

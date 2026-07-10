@@ -2066,13 +2066,6 @@
 									<span class="url">organiser.example.com</span>
 								</div>
 							</button>
-							<button class="target-item" onclick={() => selectTarget('Locker')}>
-								<span class="icon">🔒</span>
-								<div class="details">
-									<span class="name">Export to Locker</span>
-									<span class="url">locker.example.com</span>
-								</div>
-							</button>
 						</div>
 					{/if}
 				</div>

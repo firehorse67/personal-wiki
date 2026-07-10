@@ -2,6 +2,18 @@
 
 A self-hosted personal wiki inspired by [Trilium Notes](https://github.com/TriliumNext/trilium), built with SvelteKit and Supabase. Offline-first: a full copy of your notes lives in the browser (IndexedDB) and syncs in the background whenever you're online.
 
+## Screenshots
+
+### Dashboard & Quick Capture
+![Dashboard](static/screenshots/dashboard.png)
+
+### Note Editor & AI Assistant
+![Editor](static/screenshots/editor.png)
+
+### Kanban Board View
+![Kanban](static/screenshots/kanban.png)
+
+
 ## Features
 
 - **Offline-first sync** — Dexie (IndexedDB) ⟷ Supabase, works fully offline and catches up automatically
@@ -86,4 +98,4 @@ npm run build   # production build
 
 ## Acknowledgments
 
-Built collaboratively with **[Claude](https://claude.com)** (Anthropic) and **Google Antigravity** as AI pair-programming agents across the majority of this codebase — architecture, features, and code review alike.
+Built collaboratively with **[Claude](https://claude.com)** (Anthropic) and **[Google Antigravity](https://deepmind.google)** as AI pair-programming agents across the majority of this codebase — architecture, features, and code review alike.

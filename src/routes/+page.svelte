@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { auth } from '$lib/auth.svelte';
 	import { notes, initNotes } from '$lib/notes.svelte';
-	import { startSync, stopSync } from '$lib/sync';
+	import { startSync, stopSync, syncNow } from '$lib/sync';
 	import { maybeSeedWorkspace } from '$lib/initWorkspace';
 	import TreeItem from '$lib/components/TreeItem.svelte';
 	import NoteEditor from '$lib/components/NoteEditor.svelte';
@@ -210,7 +210,18 @@
 		</nav>
 		<footer>
 			<div class="footer-layout">
-				<div class="sync-status" class:online={notes.isOnline} class:syncing={notes.isSyncing} class:dirty={notes.dirtyCount > 0}>
+				<button
+					class="sync-status"
+					class:online={notes.isOnline}
+					class:syncing={notes.isSyncing}
+					class:dirty={notes.dirtyCount > 0}
+					title={notes.lastSyncError || 'Click for sync details'}
+					onclick={async () => {
+						const summary = await notes.pendingSummary();
+						void syncNow();
+						alert(summary);
+					}}
+				>
 					{#if !notes.isOnline}
 						<CloudOff size={14} class="status-icon" />
 						<span>Offline - Changes Saved Locally</span>
@@ -223,7 +234,7 @@
 							{notes.dirtyCount > 0 ? `${notes.dirtyCount} unsynced` : 'Synced'}
 						</span>
 					{/if}
-				</div>
+				</button>
 				<div class="footer-bottom">
 					<span class="email">{auth.session?.user.email}</span>
 					<button onclick={() => auth.signOut()}>Sign out</button>
@@ -428,6 +439,15 @@
 		border-radius: 4px;
 		background: rgba(255, 255, 255, 0.05);
 		transition: all 0.2s ease;
+		border: none;
+		font-family: inherit;
+		cursor: pointer;
+		width: 100%;
+		text-align: left;
+	}
+
+	.sync-status:hover {
+		background: rgba(255, 255, 255, 0.12);
 	}
 
 	.sync-status.online {
@@ -609,7 +629,9 @@
 		:global(.floating-popover),
 		:global(.bubble-menu),
 		:global(.split-toggle-btn),
-		:global(.right-viewer-pane) {
+		:global(.right-viewer-pane),
+		:global(.modal-backdrop),
+		:global(.graduate-dropdown) {
 			display: none !important;
 		}
 

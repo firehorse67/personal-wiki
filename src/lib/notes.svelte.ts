@@ -20,6 +20,9 @@ let sortOption = $state<'az' | 'za' | 'date_asc' | 'date_desc'>(
 
 let isOnline = $state(typeof window !== 'undefined' ? navigator.onLine : true);
 let isSyncing = $state(false);
+let lastSyncError = $state('');
+let attachmentsDirtyCount = $state(0);
+let attachmentTombstonesCount = $state(0);
 let sidebarOpen = $state(false);
 
 let notesTombstonesCount = $state(0);
@@ -341,7 +344,9 @@ export function initNotes(): () => void {
 		attributes: await db.attributes.toArray(),
 		tombnotes: await db.tombstones.count(),
 		tombranches: await db.branchTombstones.count(),
-		tomattrs: await db.attributeTombstones.count()
+		tomattrs: await db.attributeTombstones.count(),
+		dirtyattachments: await db.attachments.where('dirty').equals(1).count(),
+		tombattachments: await db.attachmentTombstones.count()
 	})).subscribe({
 		next: (rows) => {
 			allNotes = reuseRows(allNotes, rows.notes);
@@ -350,6 +355,8 @@ export function initNotes(): () => void {
 			notesTombstonesCount = rows.tombnotes;
 			branchesTombstonesCount = rows.tombranches;
 			attributesTombstonesCount = rows.tomattrs;
+			attachmentsDirtyCount = rows.dirtyattachments;
+			attachmentTombstonesCount = rows.tombattachments;
 
 			const hasMigrated = typeof localStorage !== 'undefined' && localStorage.getItem('wiki_root_migration_v1') === 'true';
 			if (!migratedRootNotes && !hasMigrated && allNotes.length > 0) {
@@ -986,8 +993,51 @@ const dirtyCount = $derived.by(() => {
 	const dirtyNotes = allNotes.filter(n => n.dirty).length;
 	const dirtyBranches = allBranches.filter(b => b.dirty).length;
 	const dirtyAttributes = allAttributes.filter(a => a.dirty).length;
-	return dirtyNotes + dirtyBranches + dirtyAttributes + notesTombstonesCount + branchesTombstonesCount + attributesTombstonesCount;
+	return (
+		dirtyNotes +
+		dirtyBranches +
+		dirtyAttributes +
+		attachmentsDirtyCount +
+		notesTombstonesCount +
+		branchesTombstonesCount +
+		attributesTombstonesCount +
+		attachmentTombstonesCount
+	);
 });
+
+/**
+ * Human-readable breakdown of everything still waiting to sync, plus the
+ * last sync error — so "N unsynced" is always explainable from the UI.
+ */
+async function pendingSummary(): Promise<string> {
+	const dirtyNotes = allNotes.filter((n) => n.dirty);
+	const dirtyBranches = allBranches.filter((b) => b.dirty).length;
+	const dirtyAttrs = allAttributes.filter((a) => a.dirty);
+	const deletions =
+		notesTombstonesCount +
+		branchesTombstonesCount +
+		attributesTombstonesCount +
+		attachmentTombstonesCount;
+
+	const lines: string[] = [];
+	if (dirtyNotes.length) {
+		const titles = dirtyNotes
+			.slice(0, 5)
+			.map((n) => `“${n.title || 'Untitled'}”`)
+			.join(', ');
+		lines.push(`${dirtyNotes.length} note edit${dirtyNotes.length === 1 ? '' : 's'}: ${titles}${dirtyNotes.length > 5 ? '…' : ''}`);
+	}
+	if (dirtyBranches) lines.push(`${dirtyBranches} tree placement${dirtyBranches === 1 ? '' : 's'}`);
+	if (dirtyAttrs.length) {
+		const keys = [...new Set(dirtyAttrs.map((a) => `#${a.key}`))].slice(0, 5).join(', ');
+		lines.push(`${dirtyAttrs.length} tag${dirtyAttrs.length === 1 ? '' : 's'}: ${keys}`);
+	}
+	if (attachmentsDirtyCount) lines.push(`${attachmentsDirtyCount} media metadata edit${attachmentsDirtyCount === 1 ? '' : 's'}`);
+	if (deletions) lines.push(`${deletions} deletion${deletions === 1 ? '' : 's'}`);
+	if (!lines.length) lines.push('Nothing pending — all changes are synced.');
+	if (lastSyncError) lines.push(`\nLast sync problem: ${lastSyncError}`);
+	return lines.join('\n');
+}
 
 export const notes = {
 	get isOnline() {
@@ -1002,6 +1052,13 @@ export const notes = {
 	get dirtyCount() {
 		return dirtyCount;
 	},
+	get lastSyncError() {
+		return lastSyncError;
+	},
+	set lastSyncError(val: string) {
+		lastSyncError = val;
+	},
+	pendingSummary,
 	get selected() {
 		return selected;
 	},

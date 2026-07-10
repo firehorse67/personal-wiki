@@ -44,6 +44,7 @@
 		Printer,
 		Sparkles,
 		Columns2,
+		ExternalLink,
 		Star,
 		Table as TableIcon,
 		Mic,
@@ -459,6 +460,19 @@
 		}
 	});
 
+	$effect(() => {
+		if (graduateMenuOpen) {
+			const handleOutsideClick = (e: MouseEvent) => {
+				const target = e.target as HTMLElement;
+				if (!target.closest('.graduate-container')) {
+					graduateMenuOpen = false;
+				}
+			};
+			document.addEventListener('click', handleOutsideClick);
+			return () => document.removeEventListener('click', handleOutsideClick);
+		}
+	});
+
 	let showAddPopover = $state(false);
 	let newAttrType = $state<'label' | 'relation'>('label');
 	let newAttrKey = $state('');
@@ -712,6 +726,8 @@
 	let showHighlights = $state(true);
 	let showAiSection = $state(true);
 	let splitView = $state(false);
+	let graduateMenuOpen = $state(false);
+	let selectedTargetName = $state<string | null>(null);
 
 	function stripSocialNoise() {
 		if (!editor) return;
@@ -745,6 +761,100 @@
 		if (!editor) return;
 		editor.chain().focus().toggleBlockquote().run();
 		void save();
+	}
+
+	function selectTarget(name: string) {
+		selectedTargetName = name;
+		graduateMenuOpen = false;
+	}
+
+	function getCleanMarkdown() {
+		const attrs = notes.getAttributes(note.id);
+		let md = `# ${note.title || 'Untitled'}\n\n`;
+		
+		if (attrs.length > 0) {
+			md += `---\n`;
+			for (const attr of attrs) {
+				md += `${attr.key}: ${attr.value}\n`;
+			}
+			md += `---\n\n`;
+		}
+		
+		let body = note.content || '';
+		body = body
+			.replace(/<h1>(.*?)<\/h1>/gi, '# $1\n\n')
+			.replace(/<h2>(.*?)<\/h2>/gi, '## $1\n\n')
+			.replace(/<h3>(.*?)<\/h3>/gi, '### $1\n\n')
+			.replace(/<p>(.*?)<\/p>/gi, '$1\n\n')
+			.replace(/<li>(.*?)<\/li>/gi, '- $1\n')
+			.replace(/<ul>/gi, '')
+			.replace(/<\/ul>/gi, '\n')
+			.replace(/<ol>/gi, '')
+			.replace(/<\/ol>/gi, '\n')
+			.replace(/<blockquote>(.*?)<\/blockquote>/gi, '> $1\n\n')
+			.replace(/<pre><code>(.*?)<\/code><\/pre>/gi, '```\n$1\n```\n\n')
+			.replace(/<br\s*\/?>/gi, '\n')
+			.replace(/<[^>]+>/g, '');
+			
+		md += body.trim();
+		return md;
+	}
+
+	async function exportAsMarkdown() {
+		const md = getCleanMarkdown();
+		try {
+			await navigator.clipboard.writeText(md);
+			await graduateNote();
+			selectedTargetName = null;
+			alert("Clean Markdown copied to clipboard!");
+		} catch (err) {
+			alert(`Failed to copy: ${err}`);
+		}
+	}
+
+	async function exportAsJson() {
+		const attrs = notes.getAttributes(note.id).map(a => ({
+			type: a.type,
+			key: a.key,
+			value: a.value
+		}));
+		const payload = {
+			title: note.title || 'Untitled',
+			content: note.content || '',
+			attributes: attrs,
+			created_at: note.updated_at
+		};
+
+		const jsonString = JSON.stringify(payload, null, 2);
+		const blob = new Blob([jsonString], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `${(note.title || 'untitled').toLowerCase().replace(/\s+/g, '_')}_package.json`;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+
+		await graduateNote();
+		selectedTargetName = null;
+	}
+
+	async function graduateNote() {
+		const attrs = notes.getAttributes(note.id);
+		const statusAttr = attrs.find(a => a.type === 'label' && a.key === 'status');
+		if (statusAttr) {
+			if (statusAttr.value !== 'graduated') {
+				await notes.updateAttribute(statusAttr.id, { value: 'graduated' });
+			}
+		} else {
+			await notes.addAttribute(note.id, {
+				type: 'label',
+				key: 'status',
+				value: 'graduated'
+			});
+		}
 	}
 
 	const activePdfUrl = $derived.by(() => {
@@ -1936,6 +2046,36 @@
 					{/if}
 				</div>
 
+				<div class="graduate-container">
+					<button 
+						class="graduate-btn" 
+						onclick={() => graduateMenuOpen = !graduateMenuOpen}
+						title="Graduate Note"
+					>
+						<ExternalLink size={14} />
+						Graduate Note
+					</button>
+
+					{#if graduateMenuOpen}
+						<div class="graduate-dropdown">
+							<div class="graduate-header">Archive Target</div>
+							<button class="target-item" onclick={() => selectTarget('Organiser')}>
+								<span class="icon">🏢</span>
+								<div class="details">
+									<span class="name">Export to Organiser</span>
+									<span class="url">organiser.example.com</span>
+								</div>
+							</button>
+							<button class="target-item" onclick={() => selectTarget('Locker')}>
+								<span class="icon">🔒</span>
+								<div class="details">
+									<span class="name">Export to Locker</span>
+									<span class="url">locker.example.com</span>
+								</div>
+							</button>
+						</div>
+					{/if}
+				</div>
 				<span class="status" class:visible={status !== 'idle'}>
 					{status === 'saving' ? 'Saving…' : 'Saved'}
 				</span>
@@ -2967,6 +3107,38 @@
 		</aside>
 	{/if}
 </div>
+
+{#if selectedTargetName}
+	<div class="modal-backdrop" onclick={() => selectedTargetName = null}>
+		<div class="modal-content" onclick={(e) => e.stopPropagation()}>
+			<div class="modal-header">
+				<h3>Graduate to {selectedTargetName}</h3>
+				<button class="close-btn" onclick={() => selectedTargetName = null}>×</button>
+			</div>
+			<div class="modal-body">
+				<p>Select your export package format for <strong>{selectedTargetName}</strong>:</p>
+				
+				<div class="export-options">
+					<button class="export-option-btn" onclick={exportAsMarkdown}>
+						<span class="option-icon">📝</span>
+						<div class="option-details">
+							<span class="option-title">Copy Clean Markdown</span>
+							<span class="option-desc">Copies note content & metadata tags formatted as Markdown to clipboard</span>
+						</div>
+					</button>
+
+					<button class="export-option-btn" onclick={exportAsJson}>
+						<span class="option-icon">📦</span>
+						<div class="option-details">
+							<span class="option-title">Download JSON Package</span>
+							<span class="option-desc">Downloads a .json file containing note title, content, attributes and created_at date</span>
+						</div>
+					</button>
+				</div>
+			</div>
+		</div>
+	</div>
+{/if}
 
 {#if slashMenuOpen}
 	<div class="slash-menu" style="position: fixed; top: {slashMenuCoords.top + 4}px; left: {slashMenuCoords.left}px;">
@@ -4807,6 +4979,222 @@
 		color: #1d2129;
 	}
 
+	.graduate-container {
+		position: relative;
+		display: inline-block;
+	}
+
+	.graduate-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		padding: 0.25rem 0.5rem;
+		background: #ffffff;
+		border: 1px solid #cfd3da;
+		border-radius: 4px;
+		color: #4c525d;
+		font-size: 0.75rem;
+		font-weight: 500;
+		cursor: pointer;
+		height: 28px;
+		box-sizing: border-box;
+		transition: all 0.15s ease;
+	}
+
+	.graduate-btn:hover {
+		background: #eceef2;
+		border-color: #abb2bf;
+	}
+
+	.graduate-dropdown {
+		position: absolute;
+		top: 100%;
+		right: 0;
+		margin-top: 4px;
+		background: #ffffff;
+		border: 1px solid #e2e4e8;
+		border-radius: 6px;
+		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+		z-index: 1000;
+		width: 240px;
+		padding: 0.5rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.graduate-header {
+		font-size: 0.6875rem;
+		font-weight: 700;
+		color: #8b929e;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		padding: 4px 8px;
+		border-bottom: 1px solid #f1f2f4;
+		margin-bottom: 4px;
+	}
+
+	.target-item {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		background: none;
+		border: none;
+		padding: 8px;
+		border-radius: 4px;
+		cursor: pointer;
+		text-align: left;
+		width: 100%;
+		transition: background 0.15s ease;
+	}
+
+	.target-item:hover {
+		background: #f1f2f4;
+	}
+
+	.target-item .icon {
+		font-size: 1.25rem;
+	}
+
+	.target-item .details {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.target-item .name {
+		font-size: 0.8125rem;
+		font-weight: 600;
+		color: #1d2129;
+	}
+
+	.target-item .url {
+		font-size: 0.6875rem;
+		color: #8b929e;
+	}
+
+	/* Modal Backdrop & Content Styles */
+	.modal-backdrop {
+		position: fixed;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background: rgba(29, 33, 41, 0.6);
+		backdrop-filter: blur(4px);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 2000;
+	}
+
+	.modal-content {
+		background: #ffffff;
+		border-radius: 8px;
+		box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+		width: 100%;
+		max-width: 480px;
+		overflow: hidden;
+		animation: modalFadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+	}
+
+	@keyframes modalFadeIn {
+		from {
+			opacity: 0;
+			transform: scale(0.96) translateY(8px);
+		}
+		to {
+			opacity: 1;
+			transform: scale(1) translateY(0);
+		}
+	}
+
+	.modal-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 1rem 1.25rem;
+		border-bottom: 1px solid #e2e4e8;
+	}
+
+	.modal-header h3 {
+		font-size: 1rem;
+		font-weight: 600;
+		color: #1d2129;
+		margin: 0;
+	}
+
+	.modal-header .close-btn {
+		background: none;
+		border: none;
+		font-size: 1.5rem;
+		color: #8b929e;
+		cursor: pointer;
+		line-height: 1;
+		padding: 0;
+	}
+
+	.modal-header .close-btn:hover {
+		color: #1d2129;
+	}
+
+	.modal-body {
+		padding: 1.25rem;
+	}
+
+	.modal-body p {
+		font-size: 0.875rem;
+		color: #4c525d;
+		margin: 0 0 1.25rem 0;
+	}
+
+	.export-options {
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.export-option-btn {
+		display: flex;
+		align-items: flex-start;
+		gap: 1rem;
+		background: #ffffff;
+		border: 1px solid #cfd3da;
+		border-radius: 6px;
+		padding: 1rem;
+		cursor: pointer;
+		text-align: left;
+		transition: all 0.2s ease;
+	}
+
+	.export-option-btn:hover {
+		border-color: #c66930;
+		background: rgba(198, 105, 48, 0.02);
+		box-shadow: 0 2px 8px rgba(198, 105, 48, 0.08);
+	}
+
+	.export-option-btn .option-icon {
+		font-size: 1.5rem;
+		line-height: 1;
+	}
+
+	.export-option-btn .option-details {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.export-option-btn .option-title {
+		font-size: 0.875rem;
+		font-weight: 600;
+		color: #1d2129;
+	}
+
+	.export-option-btn .option-desc {
+		font-size: 0.75rem;
+		color: #8b929e;
+		line-height: 1.4;
+	}
+
 	@media (max-width: 768px) {
 		.editor-sidebar-right {
 			display: none !important;
@@ -4844,9 +5232,10 @@
 		}
 
 		/* Mobile favours reading and quick capture: secondary note actions
-		   (clone / share) hide so the titlebar fits the viewport instead of
-		   forcing a horizontal scroll on <main>. */
+		   (clone / share / graduate) hide so the titlebar fits the viewport
+		   instead of forcing a horizontal scroll on <main>. */
 		.clone-note-btn,
+		.graduate-container,
 		.share-container {
 			display: none !important;
 		}

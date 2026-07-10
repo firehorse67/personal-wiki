@@ -30,6 +30,9 @@ export function startSync(): void {
 	if (timer) return;
 	localStorage.removeItem('wiki:last-sync'); // legacy single-table watermark
 	window.addEventListener('online', handleOnline);
+	// Mobile suspends the tab (and its interval) in the background; sync
+	// immediately when the app returns to the foreground.
+	document.addEventListener('visibilitychange', handleVisibility);
 	timer = setInterval(() => void syncNow(), SYNC_INTERVAL_MS);
 	void syncNow();
 }
@@ -39,10 +42,39 @@ export function stopSync(): void {
 	clearInterval(timer);
 	timer = null;
 	window.removeEventListener('online', handleOnline);
+	document.removeEventListener('visibilitychange', handleVisibility);
 }
 
 function handleOnline(): void {
 	void syncNow();
+}
+
+function handleVisibility(): void {
+	if (document.visibilityState === 'visible') void syncNow();
+}
+
+// A hung request (mobile network handoff, suspended tab) must never wedge
+// the whole engine: each step gets its own deadline, and a failing step
+// no longer aborts the ones after it.
+const STEP_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
+	return new Promise<T>((resolve, reject) => {
+		const timer = setTimeout(
+			() => reject(new Error(`${label} timed out after ${STEP_TIMEOUT_MS / 1000}s`)),
+			STEP_TIMEOUT_MS
+		);
+		promise.then(
+			(value) => {
+				clearTimeout(timer);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timer);
+				reject(error);
+			}
+		);
+	});
 }
 
 export async function syncNow(): Promise<void> {
@@ -55,25 +87,44 @@ export async function syncNow(): Promise<void> {
 	} catch (e) {
 		// Ignore if dynamic import fails during initial bundle load
 	}
+
+	// Push before pull so the server never overwrites unsynced local work
+	// (the merge functions skip dirty rows as a second line of defence).
+	// Notes go before branches to satisfy the branches→notes foreign key —
+	// but a failure in one step must not block independent steps (a single
+	// unpushable row previously froze deletions AND all pulls forever).
+	const failures: string[] = [];
+	const step = async (label: string, fn: () => Promise<void>) => {
+		try {
+			await withTimeout(fn(), label);
+		} catch (error) {
+			// Supabase errors are plain objects with a message, not Error instances.
+			const message =
+				error instanceof Error
+					? error.message
+					: ((error as { message?: string })?.message ?? JSON.stringify(error));
+			failures.push(`${label}: ${message}`);
+		}
+	};
+
 	try {
-		// Push before pull so the server never overwrites unsynced local work
-		// (the merge functions skip dirty rows as a second line of defence).
-		// Notes go before branches to satisfy the branches→notes foreign key.
-		await pushNotes();
-		await pushBranches();
-		await pushAttributes();
-		await pushAttachments();
-		await pushDeletes();
-		await pullNotes();
-		await pullBranches();
-		await pullAttributes();
-		await pullAttachments();
-	} catch (error) {
-		console.error('Sync pass failed; will retry on the next cycle.', error);
+		await step('push notes', pushNotes);
+		await step('push branches', pushBranches);
+		await step('push attributes', pushAttributes);
+		await step('push attachments', pushAttachments);
+		await step('push deletions', pushDeletes);
+		await step('pull notes', pullNotes);
+		await step('pull branches', pullBranches);
+		await step('pull attributes', pullAttributes);
+		await step('pull attachments', pullAttachments);
 	} finally {
 		syncing = false;
 		if (notesModule) {
 			notesModule.notes.isSyncing = false;
+			notesModule.notes.lastSyncError = failures.join(' • ');
+		}
+		if (failures.length) {
+			console.error('Sync pass had failures; will retry on the next cycle.', failures);
 		}
 	}
 }
@@ -94,13 +145,66 @@ async function pushNotes(): Promise<void> {
 	await clearDirtyFlags(db.notes, dirty);
 }
 
+function isForeignKeyError(error: { code?: string; message?: string }): boolean {
+	return error.code === '23503' || /foreign key/i.test(error.message ?? '');
+}
+
+/**
+ * A dirty branch/attribute pointing at a note that no longer exists locally
+ * can never push (the note was deleted on another device and the server
+ * cascaded) — without healing, that one orphan re-fails the push forever
+ * and the row stays "unsynced" permanently. Drop such rows with a tombstone
+ * so the next pass runs clean.
+ */
+async function healOrphanBranches(): Promise<number> {
+	const dirty = await pendingBranches();
+	let healed = 0;
+	for (const row of dirty) {
+		const noteExists = await db.notes.get(row.note_id);
+		const parentExists = row.parent_id === null || (await db.notes.get(row.parent_id));
+		if (noteExists && parentExists) continue;
+		await db.transaction('rw', [db.branches, db.branchTombstones], async () => {
+			await db.branches.delete(row.id);
+			await db.branchTombstones.put({ id: row.id, deleted_at: Date.now() });
+		});
+		healed++;
+	}
+	return healed;
+}
+
+async function healOrphanAttributes(): Promise<number> {
+	const dirty = await pendingAttributes();
+	let healed = 0;
+	for (const row of dirty) {
+		if (await db.notes.get(row.note_id)) continue;
+		await db.transaction('rw', [db.attributes, db.attributeTombstones], async () => {
+			await db.attributes.delete(row.id);
+			await db.attributeTombstones.put({ id: row.id, deleted_at: Date.now() });
+		});
+		healed++;
+	}
+	return healed;
+}
+
 async function pushBranches(): Promise<void> {
 	const dirty = await pendingBranches();
 	if (!dirty.length) return;
 
-	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...branch }) => branch);
+	// Strip local bookkeeping, the server-managed change clock, and
+	// created_at (since branches table has no created_at column remotely).
+	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...branch }) => {
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { created_at: _, ...cleanBranch } = branch as any;
+		return cleanBranch;
+	});
 	const { error } = await supabase.from('branches').upsert(payload);
-	if (error) throw error;
+	if (error) {
+		if (isForeignKeyError(error)) {
+			const healed = await healOrphanBranches();
+			if (healed) console.warn(`Sync: dropped ${healed} orphaned branch(es) referencing deleted notes.`);
+		}
+		throw error;
+	}
 
 	await clearDirtyFlags(db.branches, dirty);
 }
@@ -109,9 +213,21 @@ async function pushAttributes(): Promise<void> {
 	const dirty = await pendingAttributes();
 	if (!dirty.length) return;
 
-	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...attr }) => attr);
+	// Strip local bookkeeping, the server-managed change clock, and
+	// created_at (since attributes table has no created_at column remotely).
+	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...attr }) => {
+		// eslint-disable-next-line @typescript-eslint/no-unused-vars
+		const { created_at: _, ...cleanAttr } = attr as any;
+		return cleanAttr;
+	});
 	const { error } = await supabase.from('attributes').upsert(payload);
-	if (error) throw error;
+	if (error) {
+		if (isForeignKeyError(error)) {
+			const healed = await healOrphanAttributes();
+			if (healed) console.warn(`Sync: dropped ${healed} orphaned attribute(s) referencing deleted notes.`);
+		}
+		throw error;
+	}
 
 	await clearDirtyFlags(db.attributes, dirty);
 }

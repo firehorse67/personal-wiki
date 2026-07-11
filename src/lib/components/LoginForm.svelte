@@ -20,11 +20,11 @@
 	<form onsubmit={submit}>
 		<label>
 			Email
-			<input type="email" autocomplete="email" required bind:value={email} />
+			<input id="login-email" name="email" type="email" autocomplete="email" required bind:value={email} />
 		</label>
 		<label>
 			Password
-			<input type="password" autocomplete="current-password" required bind:value={password} />
+			<input id="login-password" name="password" type="password" autocomplete="current-password" required bind:value={password} />
 		</label>
 		{#if error}<p class="error">{error}</p>{/if}
 		<button type="submit" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>

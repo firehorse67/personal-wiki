@@ -38,6 +38,8 @@
 		"dexie": "^4.4.4",
 		"lucide-svelte": "^1.0.1",
 		"marked": "^18.0.5",
+		"pdf-lib": "^1.17.1",
+		"pdfjs-dist": "^6.1.200",
 		"turndown": "^7.2.4"
 	}
 }

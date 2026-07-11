@@ -4,6 +4,7 @@
 	import { uploadToStorage } from '$lib/uploads';
 	import { startRecording, transcribeAudio, extensionFor, type RecordingController } from '$lib/voice';
 	import { db, type LocalNote } from '$lib/db';
+	import PdfViewer from '$lib/components/PdfViewer.svelte';
 	import { Editor, Mark, mergeAttributes } from '@tiptap/core';
 	import StarterKit from '@tiptap/starter-kit';
 	import Placeholder from '@tiptap/extension-placeholder';
@@ -1130,7 +1131,7 @@
 			.replace(/"/g, '&quot;');
 	}
 
-	function insertFileCard(info: { url: string; name: string; size: number }) {
+	function insertFileCard(info: { url: string; name: string; size: number; type?: string }) {
 		// ?download=<name> makes Supabase serve Content-Disposition: attachment
 		// with a friendly filename instead of the storage path.
 		const downloadUrl = `${info.url}?download=${encodeURIComponent(info.name)}`;
@@ -1141,6 +1142,14 @@
 				`<p>📎 <a href="${info.url}" target="_blank" rel="noopener noreferrer">${escapeAttachmentName(info.name)}</a> <em>(${prettySize(info.size)})</em> · <a href="${downloadUrl}" rel="noopener noreferrer">download</a></p>`
 			)
 			.run();
+
+		// Attaching a PDF switches this note into the PDF viewer automatically
+		// (mirrors Trilium's mime-type-driven behaviour) — unless the note
+		// already has an explicit noteType (e.g. webview, search), which wins.
+		const isPdf = info.type === 'application/pdf' || /\.pdf$/i.test(info.name);
+		if (isPdf && !attributes.some((a) => a.type === 'label' && a.key === 'noteType')) {
+			void notes.addAttribute(note.id, { type: 'label', key: 'noteType', value: 'pdf' });
+		}
 	}
 
 	// ── Voice capture: record → transcribe at the cursor → attach audio ──
@@ -1960,6 +1969,8 @@
 				<Star size={18} fill={isBookmarked ? "#ffc107" : "none"} stroke={isBookmarked ? "#ffc107" : "currentColor"} />
 			</button>
 			<input
+				id="note-title-input"
+				name="note-title"
 				class="title"
 				type="text"
 				placeholder="Untitled"
@@ -2022,9 +2033,11 @@
 								<div class="share-popover-content">
 									<p class="share-title">Public Link</p>
 									<div class="copy-box">
-										<input 
-											type="text" 
-											readonly 
+										<input
+											id="share-url-copy"
+											name="share-url"
+											type="text"
+											readonly
 											value={`${location.origin}/share/${note.id}`}
 											class="copy-input"
 											onclick={(e) => (e.target as HTMLInputElement).select()}
@@ -2135,6 +2148,8 @@
 			{#each attributes as attr (attr.id)}
 				{#if editingAttrId === attr.id}
 					<input
+						id="attr-edit-input"
+						name="attr-edit"
 						type="text"
 						class="attr-edit-input"
 						bind:value={editAttrText}
@@ -2182,6 +2197,8 @@
 
 			<div class="quick-tag-wrapper">
 				<input
+					id="quick-tag-input"
+					name="quick-tag"
 					type="text"
 					class="quick-tag-input"
 					placeholder="+ tag (key:value) ⏎"
@@ -2302,7 +2319,9 @@
 		{#if !isReadingMode && currentViewType === 'editor'}
 			<div class="toolbar">
 				<!-- Group 1: Text Styling -->
-			<select 
+			<select
+				id="font-family-select"
+				name="font-family"
 				class="toolbar-select font-family-select"
 				value={currentFontFamily}
 				onchange={(e) => changeFontFamily((e.target as HTMLSelectElement).value)}
@@ -2318,7 +2337,9 @@
 				<option value="monospace">Monospace</option>
 			</select>
 
-			<select 
+			<select
+				id="font-size-select"
+				name="font-size"
 				class="toolbar-select font-size-select"
 				value={currentFontSize}
 				onchange={(e) => changeFontSize((e.target as HTMLSelectElement).value)}
@@ -2900,11 +2921,7 @@
 			{#if splitView && currentViewType === 'editor'}
 				<div class="right-viewer-pane">
 					{#if activePdfUrl}
-						<iframe 
-							src={activePdfUrl} 
-							class="pdf-viewer"
-							title="PDF Reader"
-						></iframe>
+						<PdfViewer url={activePdfUrl} noteId={note.id} compact />
 					{:else if activeImageUrl}
 						<div class="image-viewer">
 							<img src={activeImageUrl} alt="Source asset screenshot" />
@@ -3083,6 +3100,8 @@
 							<!-- Sticky input area -->
 							<div class="chat-input-wrapper">
 								<textarea
+									id="note-ai-prompt"
+									name="note-ai-prompt"
 									placeholder="Ask Gemini anything..."
 									bind:value={aiPrompt}
 									onkeydown={handlePromptKeydown}

@@ -863,22 +863,12 @@ async function purgeOldTrash(): Promise<number> {
 		}
 	}
 
-	// Purge local tombstones older than 30 days (already pushed/failed or orphaned)
-	try {
-		const oldTombnotes = await db.tombstones.filter((t) => t.deleted_at < cutoff).toArray();
-		if (oldTombnotes.length) await db.tombstones.bulkDelete(oldTombnotes.map((t) => t.id));
-
-		const oldBranchTombs = await db.branchTombstones.filter((t) => t.deleted_at < cutoff).toArray();
-		if (oldBranchTombs.length) await db.branchTombstones.bulkDelete(oldBranchTombs.map((t) => t.id));
-
-		const oldAttrTombs = await db.attributeTombstones.filter((t) => t.deleted_at < cutoff).toArray();
-		if (oldAttrTombs.length) await db.attributeTombstones.bulkDelete(oldAttrTombs.map((t) => t.id));
-
-		const oldAttachTombs = await db.attachmentTombstones.filter((t) => t.deleted_at < cutoff).toArray();
-		if (oldAttachTombs.length) await db.attachmentTombstones.bulkDelete(oldAttachTombs.map((t) => t.id));
-	} catch (err) {
-		console.error('Failed to purge old local tombstones:', err);
-	}
+	// NOTE: deliberately no local tombstone pruning here. Tombstones are
+	// removed the moment their deletion pushes successfully (pushDeletes),
+	// so the only tombstones that ever grow old are deletions that have
+	// NOT reached the server yet (a device offline for a month, or a
+	// persistently failing push). Pruning those would silently undo the
+	// deletion: the next pull would resurrect the note.
 
 	return purged;
 }

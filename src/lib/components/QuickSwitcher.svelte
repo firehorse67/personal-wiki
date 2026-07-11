@@ -88,6 +88,8 @@
 			<div class="input-row">
 				<Search size={16} class="search-icon" />
 				<input
+					id="quick-switcher-input"
+					name="quick-switcher"
 					type="text"
 					placeholder="Jump to note…"
 					bind:value={query}

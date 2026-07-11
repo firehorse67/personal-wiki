@@ -133,6 +133,8 @@
 		</header>
 
 		<input
+			id="tag-filter-input"
+			name="tag-filter"
 			type="text"
 			class="filter"
 			placeholder="Filter tags…"
@@ -147,6 +149,8 @@
 				<div class="key-row">
 					{#if editing && editing.key === key && editing.value === null}
 						<input
+							id="tag-edit-input"
+							name="tag-edit"
 							class="edit-input"
 							bind:value={editText}
 							onkeydown={(e) => {
@@ -174,6 +178,8 @@
 						<div class="value-row">
 							{#if editing && editing.key === key && editing.value === value}
 								<input
+									id="tag-value-edit-input"
+									name="tag-value-edit"
 									class="edit-input"
 									bind:value={editText}
 									onkeydown={(e) => {

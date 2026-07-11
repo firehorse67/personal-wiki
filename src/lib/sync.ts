@@ -129,18 +129,35 @@ export async function syncNow(): Promise<void> {
 	}
 }
 
+// Push payloads WHITELIST the server's columns rather than stripping known
+// local fields: a stray extra property on a local row (a created_at that
+// leaked onto branches once wedged sync for days) then can't 400 a push.
+
 async function pushNotes(): Promise<void> {
 	const dirty = await pendingNotes();
 	if (!dirty.length) return;
 
-	// Strip local bookkeeping, the server-managed change clock, and
-	// created_at (the server default owns it; also keeps pushes working
-	// before migration 0008 lands).
-	const payload = dirty.map(
-		({ dirty: _d, modified_at: _m, updated_at: _u, created_at: _c, ...note }) => note
-	);
-	const { error } = await supabase.from('notes').upsert(payload);
+	// created_at/updated_at are server-owned and deliberately not sent.
+	const payload = dirty.map((n) => ({
+		id: n.id,
+		title: n.title,
+		content: n.content,
+		is_shared: n.is_shared
+	}));
+	// Read back the server's change clock so the pull can tell our own
+	// echo (same updated_at) from a genuinely foreign edit (conflicts).
+	const { data, error } = await supabase.from('notes').upsert(payload).select('id, updated_at');
 	if (error) throw error;
+
+	if (data) {
+		const serverClock = new Map(data.map((row) => [row.id, row.updated_at]));
+		await db.transaction('rw', db.notes, async () => {
+			for (const row of dirty) {
+				const stamped = serverClock.get(row.id);
+				if (stamped) await db.notes.update(row.id, { updated_at: stamped });
+			}
+		});
+	}
 
 	await clearDirtyFlags(db.notes, dirty);
 }
@@ -190,13 +207,11 @@ async function pushBranches(): Promise<void> {
 	const dirty = await pendingBranches();
 	if (!dirty.length) return;
 
-	// Strip local bookkeeping, the server-managed change clock, and
-	// created_at (since branches table has no created_at column remotely).
-	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...branch }) => {
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		const { created_at: _, ...cleanBranch } = branch as any;
-		return cleanBranch;
-	});
+	const payload = dirty.map((b) => ({
+		id: b.id,
+		note_id: b.note_id,
+		parent_id: b.parent_id
+	}));
 	const { error } = await supabase.from('branches').upsert(payload);
 	if (error) {
 		if (isForeignKeyError(error)) {
@@ -213,13 +228,13 @@ async function pushAttributes(): Promise<void> {
 	const dirty = await pendingAttributes();
 	if (!dirty.length) return;
 
-	// Strip local bookkeeping, the server-managed change clock, and
-	// created_at (since attributes table has no created_at column remotely).
-	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...attr }) => {
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
-		const { created_at: _, ...cleanAttr } = attr as any;
-		return cleanAttr;
-	});
+	const payload = dirty.map((a) => ({
+		id: a.id,
+		note_id: a.note_id,
+		type: a.type,
+		key: a.key,
+		value: a.value
+	}));
 	const { error } = await supabase.from('attributes').upsert(payload);
 	if (error) {
 		if (isForeignKeyError(error)) {
@@ -236,7 +251,56 @@ async function pushAttachments(): Promise<void> {
 	const dirty = await pendingAttachments();
 	if (!dirty.length) return;
 
-	const payload = dirty.map(({ dirty: _d, modified_at: _m, updated_at: _u, ...meta }) => meta);
+	// If any dirty attachments have local_blob, upload them first
+	let token: string | undefined;
+	for (const m of dirty) {
+		if (m.local_blob) {
+			if (!token) {
+				const { data: sessionData } = await supabase.auth.getSession();
+				token = sessionData.session?.access_token;
+				if (!token) throw new Error('Authentication token required for attachment upload');
+			}
+
+			// 1. Get a signed upload URL for the existing file path
+			const slotResponse = await fetch('/api/upload-url', {
+				method: 'POST',
+				headers: {
+					Authorization: `Bearer ${token}`,
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({ path: m.file_path })
+			});
+			if (!slotResponse.ok) {
+				const body = await slotResponse.json().catch(() => null);
+				throw new Error(body?.message ?? `Upload slot request failed (${slotResponse.status})`);
+			}
+			const slot: { path: string; token: string } = await slotResponse.json();
+
+			// 2. Upload the binary to the signed URL (overwriting)
+			const { error: uploadError } = await supabase.storage
+				.from('clips')
+				.uploadToSignedUrl(slot.path, slot.token, m.local_blob, {
+					contentType: 'application/pdf',
+					cacheControl: '0',
+					upsert: true
+				});
+			if (uploadError) throw new Error(uploadError.message);
+
+			// 3. Clear local_blob in Dexie to free IndexedDB space
+			await db.attachments.update(m.id, { local_blob: undefined } as any);
+			m.local_blob = undefined; // Clear in-memory
+		}
+	}
+
+	// attachments DOES have a server-side created_at (unlike branches/
+	// attributes), and the local value is meaningful — keep it.
+	const payload = dirty.map((m) => ({
+		id: m.id,
+		file_path: m.file_path,
+		description: m.description,
+		alt_text: m.alt_text,
+		created_at: m.created_at
+	}));
 	// file_path is unique server-side; onConflict merges rows created
 	// independently on two devices for the same file.
 	const { error } = await supabase.from('attachments').upsert(payload, { onConflict: 'file_path' });

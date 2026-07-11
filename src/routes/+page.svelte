@@ -6,6 +6,7 @@
 	import TreeItem from '$lib/components/TreeItem.svelte';
 	import NoteEditor from '$lib/components/NoteEditor.svelte';
 	import SavedSearchView from '$lib/components/SavedSearchView.svelte';
+	import PdfViewer from '$lib/components/PdfViewer.svelte';
 	import QuickSwitcher from '$lib/components/QuickSwitcher.svelte';
 	import Dashboard from '$lib/components/Dashboard.svelte';
 	import JournalCalendar from '$lib/components/JournalCalendar.svelte';
@@ -42,6 +43,21 @@
 					.some((a) => a.type === 'label' && a.key === 'noteType' && a.value === 'search')
 			: false
 	);
+
+	// PDF note type: noteType=pdf renders the PDF.js viewer instead of the
+	// editor. The document URL comes from a `url` attribute, or falls back
+	// to the first .pdf link in the note body (the attach-flow file card).
+	const pdfNoteUrl = $derived.by(() => {
+		if (!notes.selected) return null;
+		const attrs = notes.getAttributes(notes.selected.id);
+		if (!attrs.some((a) => a.type === 'label' && a.key === 'noteType' && a.value === 'pdf')) {
+			return null;
+		}
+		const urlAttr = attrs.find((a) => a.key === 'url')?.value ?? '';
+		if (/^(https?:\/\/|\/)/i.test(urlAttr)) return urlAttr;
+		const match = notes.selected.content?.match(/href="([^"]+\.pdf[^"]*)"/i);
+		return match ? match[1] : null;
+	});
 
 	// Web View note type: noteType=webview + a url attribute swaps the
 	// editor canvas for an embedded page. http(s) only.
@@ -249,6 +265,12 @@
 				<JournalCalendar journalNote={notes.selected} />
 			{:else if isSearchNote}
 				<SavedSearchView note={notes.selected} />
+			{:else if pdfNoteUrl}
+				<PdfViewer
+					url={pdfNoteUrl}
+					noteId={notes.selected.id}
+					title={notes.selected.title || 'Untitled'}
+				/>
 			{:else if webviewUrl}
 				<div class="webview">
 					<header>
@@ -596,6 +618,10 @@
 
 		main {
 			width: 100%;
+			/* .body is display:block here, so main needs an explicit height to
+			   stay bounded and scroll — otherwise it grows past the viewport
+			   and .body's overflow:hidden clips it (PDF viewer, long notes). */
+			height: 100%;
 			box-sizing: border-box;
 			padding: 1rem;
 			/* Anything wider than the phone (Kanban, code) scrolls inside its

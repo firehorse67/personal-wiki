@@ -218,6 +218,8 @@
 			<div class="search-box">
 				<Search size={13} />
 				<input
+					id="media-search-input"
+					name="media-search"
 					type="text"
 					placeholder="Search name, description, alt text…"
 					bind:value={search}
@@ -277,6 +279,8 @@
 					</button>
 					{#if editingTileId === row.id}
 						<input
+							id="media-tile-edit"
+							name="media-tile-edit"
 							class="tile-edit"
 							bind:value={tileDraft}
 							onkeydown={(e) => {

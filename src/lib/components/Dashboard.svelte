@@ -123,15 +123,23 @@
 			const isRoot = notes.childBranches(null).some((b) => b.note_id === note.id);
 			if (isRoot) return note.id;
 		}
+		// created_at belongs on the NOTE only — branches have no such column
+		// server-side (a leaked created_at on a branch once 400'd every push).
 		const stamp = () => ({
-			created_at: new Date().toISOString(),
 			updated_at: new Date().toISOString(),
 			dirty: 1,
 			modified_at: Date.now()
 		});
 		const id = crypto.randomUUID();
 		await db.transaction('rw', [db.notes, db.branches], async () => {
-			await db.notes.put({ id, title: 'Inbox', content: '', is_shared: false, ...stamp() });
+			await db.notes.put({
+				id,
+				title: 'Inbox',
+				content: '',
+				is_shared: false,
+				created_at: new Date().toISOString(),
+				...stamp()
+			});
 			await db.branches.put({ id: crypto.randomUUID(), note_id: id, parent_id: null, ...stamp() });
 		});
 		return id;
@@ -313,6 +321,8 @@
 	<section class="widget quick-post">
 		<header><Zap size={15} /> Quick Post</header>
 		<input
+			id="qp-title-input"
+			name="qp-title"
 			type="text"
 			class="qp-title"
 			placeholder="Title (optional — timestamped if blank)"
@@ -322,6 +332,8 @@
 			}}
 		/>
 		<textarea
+			id="qp-body-input"
+			name="qp-body"
 			class="qp-body"
 			rows="4"
 			placeholder="What needs capturing?"
@@ -332,6 +344,8 @@
 		></textarea>
 		<div class="qp-row">
 			<input
+				id="qp-tags-input"
+				name="qp-tags"
 				type="text"
 				class="qp-tags"
 				placeholder="Tags: status:planning topic:Travel"

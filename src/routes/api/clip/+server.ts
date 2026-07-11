@@ -7,7 +7,7 @@ import { normalizeClip } from '$lib/server/clip';
 import type { Database } from '$lib/supabaseClient';
 import type { RequestHandler } from './$types';
 
-const INBOX_TITLE = 'Web Clips';
+const INBOX_TITLE = 'Inbox';
 
 export const OPTIONS: RequestHandler = async () => {
 	return new Response(null, {

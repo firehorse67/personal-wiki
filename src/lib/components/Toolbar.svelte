@@ -8,6 +8,36 @@
 	let tagManagerOpen = $state(false);
 	let mediaManagerOpen = $state(false);
 
+	const currentNoteType = $derived.by(() => {
+		if (!notes.selected) return 'text';
+		const attrs = notes.getAttributes(notes.selected.id);
+		const nt = attrs.find((a) => a.type === 'label' && a.key === 'noteType')?.value;
+		return nt || 'text';
+	});
+
+	const hasPdfAttachment = $derived.by(() => {
+		if (!notes.selected) return false;
+		return /href="([^"]+\.pdf[^"]*)"/i.test(notes.selected.content || '');
+	});
+
+	async function setNoteType(type: string) {
+		if (!notes.selected) return;
+		const attrs = notes.getAttributes(notes.selected.id);
+		const existing = attrs.find((a) => a.type === 'label' && a.key === 'noteType');
+
+		if (type === 'text') {
+			if (existing) {
+				await notes.removeAttribute(existing.id);
+			}
+		} else {
+			if (existing) {
+				await notes.updateAttribute(existing.id, { value: type });
+			} else {
+				await notes.addAttribute(notes.selected.id, { type: 'label', key: 'noteType', value: type });
+			}
+		}
+	}
+
 	async function saveSearchAsFolder() {
 		const q = notes.searchQuery.trim();
 		if (!q.startsWith('#')) return;
@@ -262,6 +292,8 @@
 	<div class="search-container">
 		<div class="search">
 			<input
+				id="global-search-input"
+				name="search"
 				type="text"
 				placeholder="Search notes..."
 				value={notes.searchQuery}
@@ -295,6 +327,24 @@
 			</div>
 		{/if}
 	</div>
+
+	{#if notes.selected}
+		<div class="view-mode-selector">
+			<label for="view-mode-select">View:</label>
+			<select
+				id="view-mode-select"
+				value={currentNoteType}
+				onchange={(e) => setNoteType(e.currentTarget.value)}
+			>
+				<option value="text">Rich Text</option>
+				{#if hasPdfAttachment || currentNoteType === 'pdf'}
+					<option value="pdf">PDF Viewer</option>
+				{/if}
+				<option value="webview">Web View</option>
+				<option value="search">Saved Search</option>
+			</select>
+		</div>
+	{/if}
 
 	<div class="spacer"></div>
 
@@ -345,6 +395,8 @@
 						</div>
 						<div class="chat-input-wrapper">
 							<textarea
+								id="ai-prompt-input"
+								name="ai-prompt"
 								placeholder="Ask about all notes..."
 								bind:value={aiPrompt}
 								onkeydown={handlePromptKeydown}
@@ -980,6 +1032,46 @@
 
 	.sidebar-toggle:hover {
 		color: #c66930;
+	}
+
+	.view-mode-selector {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.375rem;
+		font-size: 0.8125rem;
+		color: rgba(255, 255, 255, 0.7);
+		margin-left: 0.5rem;
+		flex-shrink: 0;
+	}
+
+	.view-mode-selector label {
+		font-size: 0.75rem;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.5px;
+		color: rgba(255, 255, 255, 0.5);
+	}
+
+	.view-mode-selector select {
+		background: rgba(255, 255, 255, 0.08);
+		border: 1px solid rgba(255, 255, 255, 0.2);
+		border-radius: 6px;
+		color: #ffffff;
+		padding: 0.25rem 0.5rem;
+		font-size: 0.8125rem;
+		outline: none;
+		cursor: pointer;
+		transition: all 0.2s ease;
+	}
+
+	.view-mode-selector select:hover {
+		border-color: rgba(255, 255, 255, 0.4);
+		background: rgba(255, 255, 255, 0.12);
+	}
+
+	.view-mode-selector select option {
+		background: #003924;
+		color: #ffffff;
 	}
 
 	@media (max-width: 768px) {

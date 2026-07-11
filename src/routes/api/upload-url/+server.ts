@@ -36,29 +36,41 @@ export const POST: RequestHandler = async ({ request }) => {
 		throw error(403, 'MFA-verified session required');
 	}
 
-	let body: { name?: unknown };
+	let body: { name?: unknown; path?: unknown };
 	try {
 		body = await request.json();
 	} catch {
 		throw error(400, 'Body must be JSON');
 	}
-	// Keep the original filename (sanitized) as the object's basename so
-	// browser open/save actions show a friendly name; the UUID folder keeps
-	// paths collision-free. slice(-100) trims from the front, preserving
-	// the extension.
-	const safeName =
-		String(body.name ?? 'file.bin')
-			.replace(/[^\w.\- ]+/g, '')
-			.replace(/\s+/g, '-')
-			.replace(/^\.+/, '')
-			.slice(-100) || 'file.bin';
-	const ext = (safeName.split('.').pop() || 'bin').toLowerCase();
-	if (BLOCKED_EXT.has(ext)) throw error(415, `.${ext} files cannot be attached`);
 
-	const path = `attachments/${randomUUID()}/${safeName}`;
+	let path = '';
+	if (typeof body.path === 'string' && body.path) {
+		path = body.path;
+		if (!path.startsWith('attachments/') || path.includes('..') || !/^[\w\-./ ]+$/.test(path)) {
+			throw error(400, 'Invalid path');
+		}
+		const ext = (path.split('.').pop() || 'bin').toLowerCase();
+		if (BLOCKED_EXT.has(ext)) throw error(415, `.${ext} files cannot be attached`);
+	} else {
+		// Keep the original filename (sanitized) as the object's basename so
+		// browser open/save actions show a friendly name; the UUID folder keeps
+		// paths collision-free. slice(-100) trims from the front, preserving
+		// the extension.
+		const safeName =
+			String(body.name ?? 'file.bin')
+				.replace(/[^\w.\- ]+/g, '')
+				.replace(/\s+/g, '-')
+				.replace(/^\.+/, '')
+				.slice(-100) || 'file.bin';
+		const ext = (safeName.split('.').pop() || 'bin').toLowerCase();
+		if (BLOCKED_EXT.has(ext)) throw error(415, `.${ext} files cannot be attached`);
+
+		path = `attachments/${randomUUID()}/${safeName}`;
+	}
+
 	const { data, error: signError } = await supabase.storage
 		.from('clips')
-		.createSignedUploadUrl(path);
+		.createSignedUploadUrl(path, { upsert: true });
 	if (signError) {
 		console.error('Signed upload URL creation failed:', signError.message);
 		throw error(502, 'Could not create upload slot');

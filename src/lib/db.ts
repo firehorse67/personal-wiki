@@ -25,6 +25,7 @@ export interface LocalAttribute extends NoteAttribute {
 export interface LocalAttachment extends AttachmentMeta {
 	dirty: number;
 	modified_at: number;
+	local_blob?: Blob;
 }
 
 /** A row deleted locally whose remote deletion hasn't been pushed yet. */
@@ -65,8 +66,18 @@ export async function mergeNotesFromServer(rows: Note[]): Promise<void> {
 			if (await db.tombstones.get(row.id)) continue; // deleted locally, push pending
 			const existing = await db.notes.get(row.id);
 			if (existing?.dirty) {
-				// Conflict check: did the content or title actually change?
-				if (existing.title !== row.title || existing.content !== row.content) {
+				// Conflict check: only a genuinely FOREIGN edit counts. The
+				// server clock must have moved past what we last saw for this
+				// row (pushNotes writes the server's updated_at back after
+				// each push, so our own echo matches and never flags — a
+				// bare content comparison flagged your own typing, because
+				// the pull echoes your push one keystroke behind the still-
+				// dirty local row).
+				const serverChangedElsewhere = existing.updated_at !== row.updated_at;
+				if (
+					serverChangedElsewhere &&
+					(existing.title !== row.title || existing.content !== row.content)
+				) {
 					// It's a real conflict. Let's add a conflict tag/attribute if not present.
 					const hasConflict = await db.attributes
 						.where('note_id')

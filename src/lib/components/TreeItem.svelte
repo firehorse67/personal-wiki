@@ -17,6 +17,7 @@
 	const placing = $derived(notes.pendingClone !== null);
 	const moving = $derived(notes.pendingMoveBranch !== null);
 	const attributes = $derived(note ? notes.getAttributes(note.id) : []);
+	const isGraduated = $derived(attributes.some(a => a.type === 'label' && a.key === 'status' && a.value === 'graduated'));
 
 	let menuOpen = $state(false);
 
@@ -111,7 +112,7 @@
 
 {#if note && isVisible}
 	<li>
-		<div class="row" class:selected class:placing={placing || moving}>
+		<div class="row" class:selected class:placing={placing || moving} class:graduated={isGraduated}>
 			<button
 				class="chevron"
 				class:open={shouldExpand}
@@ -209,6 +210,16 @@
 	.row.selected {
 		background: rgba(255, 255, 255, 0.15);
 		font-weight: 500;
+	}
+
+	.row.graduated {
+		color: #a3e635 !important;
+		border-left: 3px solid #82c91e;
+		background: rgba(130, 201, 30, 0.08);
+	}
+
+	.row.graduated:hover {
+		background: rgba(130, 201, 30, 0.15);
 	}
 
 	.row.placing:hover {

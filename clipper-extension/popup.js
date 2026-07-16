@@ -78,20 +78,42 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         descriptionInput.placeholder = 'System pages cannot be screenshotted or parsed.';
       } else {
-        // Try to read user text selection from the page
+        // Read any text selection, plus page metadata for a default description
         chrome.scripting.executeScript({
           target: { tabId: activeTab.id },
-          func: () => window.getSelection().toString().trim()
+          func: () => {
+            const meta = (sel) => {
+              const el = document.querySelector(sel);
+              return el ? (el.getAttribute('content') || '').trim() : '';
+            };
+            return {
+              selection: window.getSelection().toString().trim(),
+              siteName: meta('meta[property="og:site_name"]') || meta('meta[name="application-name"]'),
+              published: meta('meta[property="article:published_time"]') ||
+                         meta('meta[name="date"]') ||
+                         (document.querySelector('article time[datetime]')?.getAttribute('datetime') || '')
+            };
+          }
         }, (results) => {
           if (chrome.runtime.lastError) {
             console.warn('Scripting failed (expected on some pages):', chrome.runtime.lastError.message);
             return;
           }
-          if (results && results[0] && results[0].result) {
-            const selectedText = results[0].result;
-            descriptionInput.value = selectedText;
+          const info = results && results[0] && results[0].result;
+          if (!info) return;
+          if (info.selection) {
+            descriptionInput.value = info.selection;
             // Default to selection mode if there is selected text
             clipModeSelect.value = 'selection';
+          } else if (!descriptionInput.value) {
+            // Pre-fill "Site: 16 July 2026" from page metadata; falls back to
+            // the site hostname and today's date. Editable before clipping.
+            const site = info.siteName || new URL(activeTabUrl).hostname.replace(/^www\./, '');
+            const when = info.published ? new Date(info.published) : new Date();
+            const dateStr = isNaN(when) ? '' : when.toLocaleDateString('en-AU', {
+              day: 'numeric', month: 'long', year: 'numeric'
+            });
+            descriptionInput.value = dateStr ? `${site}: ${dateStr}` : site;
           }
         });
       }
@@ -208,9 +230,94 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (mode === 'article') {
       if (activeTabId !== null && !isRestrictedUrl(activeTabUrl)) {
         showStatus('Extracting page text...');
+        // Inject Mozilla Readability (the Firefox Reader View engine) first;
+        // the extractor below uses it and falls back to a heuristic strip.
         chrome.scripting.executeScript({
           target: { tabId: activeTabId },
-          func: () => document.body.innerText
+          files: ['Readability.js']
+        }, () => {
+        if (chrome.runtime.lastError) {
+          console.warn('Readability injection failed:', chrome.runtime.lastError.message);
+        }
+        chrome.scripting.executeScript({
+          target: { tabId: activeTabId },
+          func: () => {
+            // Preferred path: Mozilla Readability scores content blocks by
+            // text/link density, so link-farms ("recommended", promoted,
+            // footers) drop out no matter what their classes are named.
+            try {
+              if (typeof Readability === 'function') {
+                const parsed = new Readability(document.cloneNode(true)).parse();
+                if (parsed && parsed.textContent && parsed.textContent.trim().length > 250) {
+                  // parsed.textContent squashes paragraph breaks; rebuild them
+                  // from the article HTML via an inert DOMParser document.
+                  const dom = new DOMParser().parseFromString(parsed.content, 'text/html');
+                  const SEL = 'p,h1,h2,h3,h4,h5,h6,li,blockquote,figcaption,pre';
+                  const blocks = [...dom.body.querySelectorAll(SEL)]
+                    .filter(el => !el.querySelector(SEL))
+                    .map(el => el.textContent.replace(/\s+/g, ' ').trim())
+                    .filter(Boolean);
+                  const text = blocks.join('\n\n');
+                  const body = text.length > 250 ? text : parsed.textContent.trim();
+                  const header = [parsed.title, parsed.byline].filter(Boolean).join('\n');
+                  return (header ? header + '\n\n' : '') + body;
+                }
+              }
+            } catch (e) {
+              console.warn('Readability parse failed, falling back:', e);
+            }
+
+            // Fallback: find the main article container, clone it, drop junk
+            // (nav/ads/footers), and return its text. Falls back to the whole
+            // body if nothing article-like is found.
+            const JUNK_SELECTOR = [
+              'script', 'style', 'noscript', 'iframe', 'svg', 'form', 'button',
+              'nav', 'aside', 'footer', 'header',
+              '[role="navigation"]', '[role="banner"]', '[role="complementary"]',
+              '[role="contentinfo"]', '[aria-hidden="true"]', '[hidden]',
+              '[class*="cookie"]', '[id*="cookie"]', '[class*="consent"]',
+              '[class*="newsletter"]', '[class*="subscribe"]', '[class*="paywall"]',
+              '[class*="related"]', '[class*="recommend"]', '[class*="share"]',
+              '[class*="social"]', '[class*="comment"]', '[id*="comment"]',
+              '[class*="sidebar"]', '[id*="sidebar"]', '[class*="popup"]',
+              '[class*="banner"]', '[id*="banner"]', '[class*="promo"]',
+              '[class*="sponsor"]', '[class*="advert"]', '[id*="advert"]',
+              '[class*="-ad-"]', '[class^="ad-"]', '[class$="-ad"]',
+              '[class~="ad"]', '[class~="ads"]', '[id^="ad-"]', '[id~="ad"]',
+              'ins.adsbygoogle', '[data-ad-slot]', '[data-testid*="ad"]'
+            ].join(',');
+
+            // Candidate containers, most specific first.
+            const candidates = [
+              document.querySelector('article'),
+              document.querySelector('[role="main"]'),
+              document.querySelector('main'),
+              document.querySelector('#content, .post-content, .article-body, .entry-content, .story-body')
+            ].filter(Boolean);
+
+            // Pick the first candidate with a meaningful amount of text;
+            // an <article> that's just a teaser card is skipped.
+            let root = null;
+            for (const el of candidates) {
+              if (el.innerText && el.innerText.trim().length > 250) { root = el; break; }
+            }
+            if (!root) root = document.body;
+
+            const clone = root.cloneNode(true);
+            clone.querySelectorAll(JUNK_SELECTOR).forEach(el => el.remove());
+
+            // Cloned nodes are detached, so innerText won't reflect layout —
+            // walk block elements instead to keep paragraph breaks.
+            const holder = document.createElement('div');
+            holder.style.cssText = 'position:absolute;left:-99999px;top:0;width:800px;';
+            holder.appendChild(clone);
+            document.body.appendChild(holder);
+            const text = clone.innerText.replace(/\n{3,}/g, '\n\n').trim();
+            holder.remove();
+
+            // If stripping was too aggressive, fall back to the raw body text.
+            return text.length > 100 ? text : document.body.innerText;
+          }
         }, (results) => {
           if (chrome.runtime.lastError) {
             console.warn('Scripting failed (expected on some pages):', chrome.runtime.lastError.message);
@@ -219,6 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const pageText = results && results[0] && results[0].result ? results[0].result : '';
             delegateClipToBackground(null, pageText);
           }
+        });
         });
       } else {
         delegateClipToBackground(null, '');

@@ -9,6 +9,30 @@ import type { RequestHandler } from './$types';
 
 const INBOX_TITLE = 'Inbox';
 
+// Simple fixed-window rate limit. In-memory, so on Vercel it's per warm
+// instance rather than global — good enough to blunt token-abuse spam on a
+// single-user site without adding a datastore round-trip.
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const RATE_LIMIT_MAX = 30;
+const rateWindows = new Map<string, { start: number; count: number }>();
+
+function rateLimited(key: string): boolean {
+	const now = Date.now();
+	const win = rateWindows.get(key);
+	if (!win || now - win.start > RATE_LIMIT_WINDOW_MS) {
+		// Sweep expired entries on rollover so the map can't grow unbounded.
+		if (rateWindows.size > 1000) {
+			for (const [k, v] of rateWindows) {
+				if (now - v.start > RATE_LIMIT_WINDOW_MS) rateWindows.delete(k);
+			}
+		}
+		rateWindows.set(key, { start: now, count: 1 });
+		return false;
+	}
+	win.count++;
+	return win.count > RATE_LIMIT_MAX;
+}
+
 export const OPTIONS: RequestHandler = async () => {
 	return new Response(null, {
 		headers: {
@@ -26,10 +50,20 @@ export const OPTIONS: RequestHandler = async () => {
  * key never leaves this serverless function. Accepted JSON fields:
  * { title?, url?, excerpt?, html? } — at least one of url/excerpt/html.
  */
-export const POST: RequestHandler = async ({ request }) => {
+export const POST: RequestHandler = async ({ request, getClientAddress }) => {
 	// Config check for the token comes first; auth for everything after.
 	if (!env.CLIPPER_API_TOKEN) {
 		return json({ message: 'Clipper endpoint is not configured' }, { status: 500, headers: { 'Access-Control-Allow-Origin': '*' } });
+	}
+	// Rate-limit before auth so bad-token brute forcing is capped too.
+	let clientKey = 'unknown';
+	try {
+		clientKey = getClientAddress();
+	} catch {
+		// adapter can't determine the address (e.g. prerender/test) — share one bucket
+	}
+	if (rateLimited(clientKey)) {
+		return json({ message: 'Too many clips — try again in a few minutes' }, { status: 429, headers: { 'Access-Control-Allow-Origin': '*' } });
 	}
 	if (!bearerMatches(request.headers.get('authorization'), env.CLIPPER_API_TOKEN)) {
 		return json({ message: 'Invalid or missing bearer token' }, { status: 401, headers: { 'Access-Control-Allow-Origin': '*' } });

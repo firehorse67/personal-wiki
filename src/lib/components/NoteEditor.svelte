@@ -2033,11 +2033,11 @@
 								<div class="share-popover-content">
 									<p class="share-title">Public Link</p>
 									<div class="copy-box">
-										<input
+										<input 
 											id="share-url-copy"
 											name="share-url"
-											type="text"
-											readonly
+											type="text" 
+											readonly 
 											value={`${location.origin}/share/${note.id}`}
 											class="copy-input"
 											onclick={(e) => (e.target as HTMLInputElement).select()}
@@ -2319,7 +2319,7 @@
 		{#if !isReadingMode && currentViewType === 'editor'}
 			<div class="toolbar">
 				<!-- Group 1: Text Styling -->
-			<select
+			<select 
 				id="font-family-select"
 				name="font-family"
 				class="toolbar-select font-family-select"
@@ -2337,7 +2337,7 @@
 				<option value="monospace">Monospace</option>
 			</select>
 
-			<select
+			<select 
 				id="font-size-select"
 				name="font-size"
 				class="toolbar-select font-size-select"

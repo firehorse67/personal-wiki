@@ -4,13 +4,12 @@ import { db, type LocalNote, type LocalBranch, type LocalAttribute } from '$lib/
 import { syncNow } from '$lib/sync';
 
 /**
- * JSON transfer uses a companion Organiser-style backup shape ({ version,
- * exportedAt, notebooks, notes, journals, ... }) so exports import straight
- * into a compatible notes app. Wiki tree structure flattens for that shape
- * (root notes → notebooks, descendants → pages); an extra `wiki` key
- * carries the exact notes/branches/attributes rows for lossless wiki→wiki
- * restores — a companion app's importer only reads its known collections
- * and ignores it.
+ * JSON transfer uses a companion Organiser-style backup shape ({ version, exportedAt,
+ * notebooks, notes, journals, ... }) so exports import straight into the
+ * Organiser. Wiki tree structure flattens for the Organiser (root notes →
+ * notebooks, descendants → pages); an extra `wiki` key carries the exact
+ * notes/branches/attributes rows for lossless wiki→wiki restores — the
+ * Organiser's importer only reads its known collections and ignores it.
  */
 
 const clock = () => new Date().toISOString();
@@ -458,4 +457,143 @@ export async function importMarkdown(files: FileList): Promise<string> {
 	}
 	void syncNow();
 	return `Imported ${count} Markdown ${count === 1 ? 'note' : 'notes'}`;
+}
+
+// ---------- Note-shaped data JSON (e.g. a bill-scanning app's export) ----------
+
+/**
+ * A single "Key: Value | Key: Value | ..." line — common when an external
+ * tool summarises structured fields as one line before the full extracted
+ * text. Rendered as a small table pinned above the rest of the note.
+ */
+function extractSummaryLine(content: string): { table: string; body: string } | null {
+	const firstBreak = content.indexOf('\n\n');
+	const firstLine = (firstBreak === -1 ? content : content.slice(0, firstBreak)).trim();
+	if (!firstLine.includes('|')) return null;
+
+	const pairs = firstLine.split('|').map((segment) => {
+		const colon = segment.indexOf(':');
+		if (colon === -1) return null;
+		const key = segment.slice(0, colon).trim();
+		const value = segment.slice(colon + 1).trim();
+		return key && value ? { key, value } : null;
+	});
+	if (pairs.some((p) => !p) || pairs.length < 2) return null;
+
+	const rows = (pairs as { key: string; value: string }[])
+		.map(({ key, value }) => `<tr><td><strong>${escapeHtml(key)}</strong></td><td>${escapeHtml(value)}</td></tr>`)
+		.join('');
+	return {
+		table: `<table><tbody>${rows}</tbody></table>`,
+		body: firstBreak === -1 ? '' : content.slice(firstBreak + 2)
+	};
+}
+
+function escapeHtml(text: string): string {
+	return text
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;');
+}
+
+/**
+ * A 📎 file-card link back to the source document, matching the visual
+ * convention used everywhere else a file is attached in the app. Kept as a
+ * plain link (not noteType=pdf) so the note stays in rich-text/searchable
+ * form — the extracted text is the point, the PDF is there to verify against.
+ */
+function sourcePdfCard(url: string): string {
+	let label = 'Source PDF';
+	try {
+		const name = decodeURIComponent(url.split('?')[0].split('/').pop() ?? '');
+		if (name) label = name;
+	} catch {
+		/* keep the generic label */
+	}
+	return `<p>📎 <a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a></p>`;
+}
+
+interface ImportableNote {
+	title?: unknown;
+	content?: unknown;
+	tags?: unknown;
+	sourcePdfUrl?: unknown;
+}
+
+/**
+ * Import one or more { title, content, tags, sourcePdfUrl? } records — the
+ * shape a note-taking or data-extraction tool naturally produces (e.g. a
+ * utility-bill scanner). A leading "Key: Value | Key: Value" summary line in
+ * `content` becomes a table; the remainder is parsed as Markdown. An optional
+ * `sourcePdfUrl` is linked as a file card so the extraction can be checked
+ * against the original. Each import lands as a child of a root note titled
+ * `parentTitle` (created if missing).
+ */
+export async function importNoteJson(file: File, parentTitle = 'Inbox'): Promise<string> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(await file.text());
+	} catch {
+		throw new Error('File is not valid JSON');
+	}
+	const items: ImportableNote[] = Array.isArray(parsed) ? parsed : [parsed];
+	const usable = items.filter(
+		(item): item is ImportableNote =>
+			typeof item === 'object' && item !== null && (typeof (item as ImportableNote).title === 'string' || typeof (item as ImportableNote).content === 'string')
+	);
+	if (!usable.length) throw new Error('No importable notes found — expected { title, content, tags } objects');
+
+	const stamp = () => ({ updated_at: clock(), dirty: 1, modified_at: Date.now() });
+	let imported = 0;
+
+	await db.transaction('rw', [db.notes, db.branches, db.attributes], async () => {
+		let parentId: string | null = null;
+		const candidates = await db.notes.where('title').equals(parentTitle).primaryKeys();
+		for (const id of candidates) {
+			const placements = await db.branches.where('note_id').equals(id).toArray();
+			if (placements.some((b) => b.parent_id === null)) {
+				parentId = id;
+				break;
+			}
+		}
+		if (!parentId) {
+			parentId = crypto.randomUUID();
+			await db.notes.put({ id: parentId, title: parentTitle, content: '', is_shared: false, ...stamp() });
+			await db.branches.put({ id: crypto.randomUUID(), note_id: parentId, parent_id: null, ...stamp() });
+		}
+
+		for (const item of usable) {
+			const title = typeof item.title === 'string' && item.title.trim() ? item.title.trim() : 'Untitled import';
+			const rawContent = typeof item.content === 'string' ? item.content : '';
+			const summary = extractSummaryLine(rawContent);
+			const bodyMarkdown = summary ? summary.body : rawContent;
+			const bodyHtml = bodyMarkdown.trim() ? await marked.parse(bodyMarkdown) : '';
+			const pdfCard =
+				typeof item.sourcePdfUrl === 'string' && item.sourcePdfUrl.trim()
+					? sourcePdfCard(item.sourcePdfUrl.trim())
+					: '';
+			const content = (summary ? summary.table : '') + pdfCard + bodyHtml;
+
+			const noteId = crypto.randomUUID();
+			await db.notes.put({ id: noteId, title, content, is_shared: false, ...stamp() });
+			await db.branches.put({ id: crypto.randomUUID(), note_id: noteId, parent_id: parentId, ...stamp() });
+			for (const tag of Array.isArray(item.tags) ? item.tags : []) {
+				if (typeof tag === 'string' && tag.trim()) {
+					await db.attributes.put({
+						id: crypto.randomUUID(),
+						note_id: noteId,
+						type: 'label',
+						key: tag.trim(),
+						value: '',
+						...stamp()
+					});
+				}
+			}
+			imported++;
+		}
+	});
+
+	void syncNow();
+	return `Imported ${imported} ${imported === 1 ? 'note' : 'notes'} into "${parentTitle}"`;
 }

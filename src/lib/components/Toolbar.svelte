@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { notes } from '$lib/notes.svelte';
-	import { exportJson, importJson, exportMarkdown, importMarkdown, exportOrganiserJson, importOrganiserJson } from '$lib/importExport';
+	import { exportJson, importJson, exportMarkdown, importMarkdown, exportOrganiserJson, importOrganiserJson, importNoteJson } from '$lib/importExport';
 	import TagManager from '$lib/components/TagManager.svelte';
 	import MediaManager from '$lib/components/MediaManager.svelte';
 	import { Eye, EyeOff, Sparkles } from 'lucide-svelte';
@@ -54,6 +54,7 @@
 	let busy = $state(false);
 	let jsonInput: HTMLInputElement;
 	let organiserJsonInput: HTMLInputElement;
+	let noteJsonInput: HTMLInputElement;
 	let mdInput: HTMLInputElement;
 	let showApiKey = $state(false);
 
@@ -121,6 +122,13 @@
 		if (!file) return;
 		if (!confirm(`Import “${file.name}” in Organiser format? New notes will be created.`)) return;
 		await run(() => importOrganiserJson(file));
+	}
+
+	async function onNoteJsonChosen() {
+		const file = noteJsonInput.files?.[0];
+		noteJsonInput.value = '';
+		if (!file) return;
+		await run(() => importNoteJson(file));
 	}
 
 	async function onMdChosen() {
@@ -446,7 +454,8 @@
 					Export note as Markdown
 				</button>
 				<button onclick={() => { menuOpen = false; mdInput.click(); }}>Import Markdown…</button>
-				
+				<button onclick={() => { menuOpen = false; noteJsonInput.click(); }}>Import Note Data JSON…</button>
+
 				<span class="section">Maintenance</span>
 				<button onclick={() => { menuOpen = false; tagManagerOpen = true; }}>Tag Manager…</button>
 				<button onclick={() => { menuOpen = false; mediaManagerOpen = true; }}>Media Library…</button>
@@ -500,6 +509,7 @@
 	<input type="file" accept=".json,application/json" hidden bind:this={jsonInput} onchange={onJsonChosen} />
 	<input type="file" accept=".json,application/json" hidden bind:this={organiserJsonInput} onchange={onOrganiserJsonChosen} />
 	<input type="file" accept=".md,.markdown,.txt" multiple hidden bind:this={mdInput} onchange={onMdChosen} />
+	<input type="file" accept=".json,application/json" hidden bind:this={noteJsonInput} onchange={onNoteJsonChosen} />
 </header>
 
 <style>
